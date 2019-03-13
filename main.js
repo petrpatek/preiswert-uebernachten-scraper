@@ -46,13 +46,13 @@ Apify.main(async () => {
         handlePageFunction: async ({ request, page }) => {
             console.log(`Processing ${request.url}...`);
             await Apify.utils.puppeteer.injectJQuery(page);
-            switch (request.userData.label) {
-            case 'start-page':
-                const gpages = [];
-
+            const gpages = [];
+            const cpages = [];
+            console.log(request.userData.label === 'start-page');
+            if (request.userData.label === 'start-page') {
                 const links = await page.evaluate(() => {
                     const result = [];
-                    $('ul.alphabet > li a').each((index, element) => {
+                    $('#navigation > li a').each((index, element) => {
                         result.push({
                             title: $(element).text().trim(),
                             url: $(element).attr('href'),
@@ -61,24 +61,114 @@ Apify.main(async () => {
                     return result;
                 });
                 for (const { url, title } of links) { // could be imroved via promise all and batch processing
-                    await Promise.all([
-                        requestQueue.addRequest({
-                            url,
-                            userData: {
-                                label: 'glossary-page',
-                            },
-                        }),
-                        Apify.pushData({ title, url }),
-                    ]);
+                    await requestQueue.addRequest({
+                        url,
+                        userData: {
+                            label: 'glossary-page',
+                        },
+                    });
+                    await Apify.pushData({ title, url });
                 }
 
                 await Apify.pushData({
-                    type: request.label,
+                    type: request.userData.label,
                     glossaries: gpages,
                 });
-                break;
+            } else if (request.userData.label === 'glossary-page') {
+                const { items, glossary_letter } = await page.evaluate(() => {
+                    const items = [];
+                    $('div.full-rel-left.list-of-places.mb15.mt20 li a').each((index, element) => {
+                        items.push({
+                            url: $(element).attr('href'),
+                            title: $(element).text().trim(),
+
+                        });
+                    });
+                    return {
+                        items,
+                        glossary_letter: $('body > div.container > div.row.full-rel-left.content > div > h1 > span').text().trim(),
+                    };
+                });
+                for (const { url, title } of items) {
+                    await requestQueue.addRequest({
+                        url,
+                        label: 'city-page',
+
+                    });
+                    cpages.push({ title, url });
+                }
+                await Apify.pushData({
+                    type: request.userData.label,
+                    glossary_letter,
+                    cities: cpages,
+                });
+            } else if (request.userData.label === 'city-page') {
+                const { items, city } = await page.evaluate(() => {
+                    const items = [];
+                    const city = $('body > div.container > div.row.full-rel-left.content > div.full-rel-left > h1').text().trim();
+                    $('ul.hotels-list div.title-address').each((index, element) => {
+                        result.push({
+                            city: $('body > div.container > div.row.full-rel-left.content > div.full-rel-left > h1').text().trim(),
+                            name: $(element).find('a').text().trim(),
+                            addr_full: $(element).find('div[itemprop=address]').text().trim(),
+                            addr_street: $(element).find('div[itemprop=address] span[itemprop=streetAddress]').text().trim(),
+                            addr_postalcode: $(element).find('div[itemprop=address] span[itemprop=postalCode]').text().trim(),
+                            addr_locality: $(element).find('div[itemprop=address] span[itemprop=addressLocality]').text().trim(),
+                            price_range: $(element).closest('div.content').find('li[itemprop=priceRange]').text()
+                                .trim(),
+                            url: $(element).find('a').attr('href'),
+                        });
+                    });
+                    return { items, city };
+                });
+                for (const { url } of items) {
+                    await requestQueue.addRequest({
+                        url,
+                        userData: {
+                            label: 'hotel-page',
+                        },
+
+                    });
+                }
+
+                await Apify.pushData({
+                    type: request.userData.label,
+                    city,
+                    hotels: items,
+                });
+            } else if (request.userData.label === 'hotel-page') {
+                const hotel = await page.evaluate(() => {
+                    const hotel_data = {
+                        name: $('body div.hotel-view h1').text().trim(),
+                        address: $('div.hotel-view div.address > p:first').text().trim().replace(/\t| +/g, ' '),
+                        phone: ($('div.hotel-view div.address').text().match(/(?:(?:^|\n) *)Telefon: (.+)(?:\n|$)/) || ['']).pop().trim(),
+                        fax: ($('div.hotel-view div.address').text().match(/(?:(?:^|\n) *)Fax: (.+)(?:\n|$)/) || ['']).pop().trim(),
+                        email: ($('div.hotel-view div.address').text().match(/(?:(?:^|\n) *)E-Mail: (.+)(?:\n|$)/) || ['']).pop().trim(),
+                        website: ($('div.hotel-view div.address').text().match(/(?:(?:^|\n) *)Web: (.+)(?:\n|$)/) || ['']).pop().trim(),
+                        number_of_beds: ($('div.hotel-view div.hotel-features').text().match(/Anzahl der Betten: (.+)(?:\n|$)/) || ['']).pop().trim(),
+                        owner: ($('div.hotel-view div.address').text().match(/(?:(?:^|\n) *)Inhaber: (.+)(?:\n|$)/) || ['']).pop().trim(),
+                        amenities: $('div.hotel-view div.hotel-features div.room-facilities').parent().find('ul li').map(function () { return $(this).text(); })
+                            .get(),
+                    };
+
+                    if ($('#mapDiv a[jsaction="mouseup:placeCard.largerMap"]')) {
+                        try {
+                            hotel_data.lon = ($('#mapDiv a[jsaction="mouseup:placeCard.largerMap"]').href.match(/(?:\/maps\?ll=)(?:-?\d+\.\d*)(?:,)(-?\d+\.\d*)/) || ['']).pop().trim();
+                            hotel_data.lat = ($('#mapDiv a[jsaction="mouseup:placeCard.largerMap"]').href.match(/(?:\/maps\?ll=)(-?\d+\.\d*)(?:,)(?:-?\d+\.\d*)/) || ['']).pop().trim();
+                        } catch (error) {
+                            hotel_data.lon = null;
+                            hotel_data.lat = null;
+                        }
+                    }
+                });
+
+                await Apify.pushData({
+                    url: request.url,
+                    type: request.userData.label,
+                    ...hotel,
+
+                });
             }
-            await Apify.utils.sleep(4000000);
         },
 
         // This function is called if the page processing failed more than maxRequestRetries+1 times.
