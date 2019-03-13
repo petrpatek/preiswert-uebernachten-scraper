@@ -10,6 +10,13 @@
 
 const Apify = require('apify');
 
+function maybeAddRoot(url) {
+    console.log(url, 'URL', url.includes('preiswert-uebernachten.de'));
+    if (url.includes('preiswert-uebernachten.de')) {
+        return url;
+    }
+    return `https://www.preiswert-uebernachten.de${url}`;
+}
 Apify.main(async () => {
     // Create and initialize an instance of the RequestList class that contains the start URL.
     const requestList = new Apify.RequestList({
@@ -36,7 +43,9 @@ Apify.main(async () => {
 
         // Here you can set options that are passed to the Apify.launchPuppeteer() function.
         // For example, you can set "slowMo" to slow down Puppeteer operations to simplify debugging
-        launchPuppeteerOptions: { slowMo: 500 },
+        launchPuppeteerOptions: {
+            //  slowMo: 500
+        },
         // This function will be called for each URL to crawl.
         // Here you can write the Puppeteer scripts you are familiar with,
         // with the exception that browsers and pages are automatically managed by the Apify SDK.
@@ -46,9 +55,9 @@ Apify.main(async () => {
         handlePageFunction: async ({ request, page }) => {
             console.log(`Processing ${request.url}...`);
             await Apify.utils.puppeteer.injectJQuery(page);
-            const gpages = [];
             const cpages = [];
             console.log(request.userData.label === 'start-page');
+            const gpages = [];
             if (request.userData.label === 'start-page') {
                 const links = await page.evaluate(() => {
                     const result = [];
@@ -62,12 +71,12 @@ Apify.main(async () => {
                 });
                 for (const { url, title } of links) { // could be imroved via promise all and batch processing
                     await requestQueue.addRequest({
-                        url,
+                        url: maybeAddRoot(url),
                         userData: {
                             label: 'glossary-page',
                         },
                     });
-                    await Apify.pushData({ title, url });
+                    await gpages.push({ title, url });
                 }
 
                 await Apify.pushData({
@@ -91,8 +100,10 @@ Apify.main(async () => {
                 });
                 for (const { url, title } of items) {
                     await requestQueue.addRequest({
-                        url,
-                        label: 'city-page',
+                        url: maybeAddRoot(url),
+                        userData: {
+                            label: 'city-page',
+                        },
 
                     });
                     cpages.push({ title, url });
@@ -107,7 +118,7 @@ Apify.main(async () => {
                     const items = [];
                     const city = $('body > div.container > div.row.full-rel-left.content > div.full-rel-left > h1').text().trim();
                     $('ul.hotels-list div.title-address').each((index, element) => {
-                        result.push({
+                        items.push({
                             city: $('body > div.container > div.row.full-rel-left.content > div.full-rel-left > h1').text().trim(),
                             name: $(element).find('a').text().trim(),
                             addr_full: $(element).find('div[itemprop=address]').text().trim(),
@@ -121,9 +132,10 @@ Apify.main(async () => {
                     });
                     return { items, city };
                 });
+                console.log(city, 'CITY');
                 for (const { url } of items) {
                     await requestQueue.addRequest({
-                        url,
+                        url: maybeAddRoot(url),
                         userData: {
                             label: 'hotel-page',
                         },
@@ -160,6 +172,7 @@ Apify.main(async () => {
                             hotel_data.lat = null;
                         }
                     }
+                    return hotel_data;
                 });
 
                 await Apify.pushData({
